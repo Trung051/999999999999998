@@ -1,0 +1,119 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>QR Scanner</title>
+    <script src="https://unpkg.com/streamlit-component-lib@1.4.0/dist/streamlit-component-lib.js"></script>
+    <script src="https://unpkg.com/html5-qrcode@2.3.10/html5-qrcode.min.js"></script>
+    <style>
+      html, body { height: 100%; margin: 0; }
+      body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial; background: #0b1220; color: #e5e7eb; }
+      .wrap { display: flex; flex-direction: column; gap: 10px; padding: 10px; box-sizing: border-box; height: 100%; }
+      .reader { flex: 1; min-height: 55vh; border-radius: 12px; overflow: hidden; background: #111827; border: 1px solid rgba(255,255,255,0.08); }
+      .bar { display: flex; gap: 8px; align-items: center; }
+      .pill { padding: 6px 10px; border-radius: 999px; background: rgba(255,255,255,0.08); font-size: 12px; }
+      .btn { padding: 8px 10px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.12); background: rgba(255,255,255,0.06); color: #e5e7eb; }
+      .btn:active { transform: scale(0.99); }
+      .err { color: #fca5a5; font-size: 12px; }
+      .hint { color: #cbd5e1; font-size: 12px; }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="bar">
+        <div class="pill" id="status">Starting…</div>
+        <button class="btn" id="toggle">Pause</button>
+        <div class="pill" id="last">Last: -</div>
+      </div>
+      <div class="reader" id="reader"></div>
+      <div class="hint">Quét liên tục. Đưa QR vào khung là tự nhận. Dùng camera sau (environment).</div>
+      <div class="err" id="err"></div>
+    </div>
+
+    <script>
+      const statusEl = document.getElementById('status');
+      const lastEl = document.getElementById('last');
+      const errEl = document.getElementById('err');
+      const toggleBtn = document.getElementById('toggle');
+
+      let paused = false;
+      let lastText = "";
+      let lastAt = 0;
+      const DEDUPE_MS = 1200; // avoid firing same code repeatedly while still in view
+
+      function setStatus(t) { statusEl.textContent = t; }
+      function setErr(t) { errEl.textContent = t || ""; }
+
+      function sendToStreamlit(text) {
+        Streamlit.setComponentValue({ text, ts: Date.now() });
+      }
+
+      const onScanSuccess = (decodedText, decodedResult) => {
+        if (paused) return;
+        const now = Date.now();
+        if (decodedText === lastText && (now - lastAt) < DEDUPE_MS) return;
+        lastText = decodedText;
+        lastAt = now;
+        lastEl.textContent = `Last: ${decodedText}`;
+        setStatus('Scanning…');
+        sendToStreamlit(decodedText);
+      };
+
+      const onScanFailure = (error) => {
+        // keep silent (spammy). Only show if critical.
+      };
+
+      const html5QrCode = new Html5Qrcode("reader");
+
+      async function start() {
+        try {
+          setErr("");
+          setStatus("Requesting camera…");
+          const cameras = await Html5Qrcode.getCameras();
+          if (!cameras || cameras.length === 0) {
+            setErr("No camera found");
+            return;
+          }
+          // Try to pick back camera if possible
+          const back = cameras.find(c => (c.label || '').toLowerCase().includes('back') || (c.label || '').toLowerCase().includes('environment'));
+          const camId = (back || cameras[cameras.length - 1]).id;
+
+          await html5QrCode.start(
+            { deviceId: { exact: camId } },
+            {
+              fps: 24,
+              qrbox: (vw, vh) => {
+                const size = Math.floor(Math.min(vw, vh) * 0.70);
+                return { width: size, height: size };
+              },
+              aspectRatio: 1.777,
+              disableFlip: true,
+              experimentalFeatures: { useBarCodeDetectorIfSupported: true },
+            },
+            onScanSuccess,
+            onScanFailure
+          );
+
+          setStatus("Scanning…");
+        } catch (e) {
+          setErr(String(e));
+          setStatus("Error");
+        }
+      }
+
+      toggleBtn.addEventListener('click', async () => {
+        paused = !paused;
+        toggleBtn.textContent = paused ? 'Resume' : 'Pause';
+        setStatus(paused ? 'Paused' : 'Scanning…');
+      });
+
+      Streamlit.events.addEventListener(Streamlit.RENDER_EVENT, () => {
+        Streamlit.setFrameHeight(document.body.scrollHeight);
+      });
+
+      Streamlit.setComponentReady();
+      start();
+    </script>
+  </body>
+</html>
